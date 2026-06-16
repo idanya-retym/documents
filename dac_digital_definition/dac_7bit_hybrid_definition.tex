@@ -1,0 +1,423 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{amsmath}
+
+\geometry{margin=2.5cm}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    urlcolor=blue!70!black
+}
+
+% Code listing style
+\definecolor{codebg}{gray}{0.95}
+\definecolor{codegreen}{rgb}{0,0.5,0}
+\definecolor{codeblue}{rgb}{0,0,0.7}
+
+\lstdefinestyle{verilog}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{codeblue}\bfseries,
+    commentstyle=\color{codegreen}\itshape,
+    stringstyle=\color{red!70!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=8pt,
+    frame=single,
+    frameround=tttt,
+    breaklines=true,
+    captionpos=b,
+    morekeywords={module,endmodule,input,output,wire,reg,assign,always,begin,end,
+                  case,endcase,default,genvar,generate,endgenerate,for,parameter},
+    tabsize=4
+}
+
+\lstset{style=verilog}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize 7-Bit Hybrid DAC --- Digital Definition}
+\fancyhead[R]{\footnotesize CONFIDENTIAL}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% Title
+\title{
+    \vspace{-1cm}
+    \textbf{Digital Implementation Definition} \\
+    \Large 7-Bit Hybrid DAC Controller \\
+    (4-Bit Binary + 3→7 Thermometric with Reorder Mux)
+}
+\author{Retym --- Analog/Mixed-Signal Design Group}
+\date{Document Date: \today \\ Revision: 1.0}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{fancy}
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Overview}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Parameter}           & \textbf{Value} \\
+\midrule
+Total DAC resolution         & 7 bits \\
+Binary LSB segment           & 4 bits (codes 0--15) \\
+Thermometric MSB segment     & 3 MSB $\rightarrow$ 7 thermometer-coded bits \\
+Total analog outputs         & 4 binary + 7 thermometric = 11 unit elements \\
+\bottomrule
+\end{tabular}
+\caption{DAC Parameters}
+\end{table}
+
+\textbf{Input:} 7-bit digital code \texttt{D[6:0]}
+\begin{itemize}
+    \item \texttt{D[3:0]} --- Binary LSB segment (directly drives 4 binary-weighted current/voltage sources).
+    \item \texttt{D[6:4]} --- 3-bit MSB segment, converted to 7-bit thermometric code.
+\end{itemize}
+
+%==============================================================================
+\section{Architecture Block Diagram}
+
+\begin{verbatim}
+                 +--------------------------------------------------+
+                 |           DAC Digital Controller                  |
+                 |                                                   |
+ D[6:0] ------->|  +----------+    +------------------+             |
+                 |  | Binary-to|    | Thermometric     |             |
+         D[6:4]-+->| Thermo   +--->| Reorder Mux      +---> T[6:0] |
+                 |  | Encoder  |    | (7x7)            |             |
+                 |  +----------+    +------------------+             |
+                 |                                                   |
+         D[3:0]-+-----------------------------------------> B[3:0]  |
+                 |                                                   |
+                 +--------------------------------------------------+
+
+ T[6:0] -> 7 thermometric unit elements (MSB segment)
+ B[3:0] -> 4 binary-weighted elements (LSB segment)
+\end{verbatim}
+
+%==============================================================================
+\section{Binary-to-Thermometric Encoder}
+
+\subsection{Function}
+
+Converts 3-bit binary input \texttt{D[6:4]} to 7-bit thermometric output.
+
+\subsection{Truth Table}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}cc@{}}
+\toprule
+\textbf{D[6:4] (decimal)} & \textbf{Thermometric Output TH[6:0]} \\
+\midrule
+000 (0) & 0000000 \\
+001 (1) & 0000001 \\
+010 (2) & 0000011 \\
+011 (3) & 0000111 \\
+100 (4) & 0001111 \\
+101 (5) & 0011111 \\
+110 (6) & 0111111 \\
+111 (7) & 1111111 \\
+\bottomrule
+\end{tabular}
+\caption{Binary-to-Thermometric Encoding}
+\end{table}
+
+\subsection{Implementation}
+
+Combinational logic. RTL implementation:
+
+\begin{lstlisting}[caption={Binary-to-Thermometric Encoder}]
+module bin2thermo (
+    input  wire [2:0] bin,   // D[6:4]
+    output reg  [6:0] thermo // thermometric code
+);
+
+    always @(*) begin
+        case (bin)
+            3'd0: thermo = 7'b000_0000;
+            3'd1: thermo = 7'b000_0001;
+            3'd2: thermo = 7'b000_0011;
+            3'd3: thermo = 7'b000_0111;
+            3'd4: thermo = 7'b000_1111;
+            3'd5: thermo = 7'b001_1111;
+            3'd6: thermo = 7'b011_1111;
+            3'd7: thermo = 7'b111_1111;
+            default: thermo = 7'b000_0000;
+        endcase
+    end
+
+endmodule
+\end{lstlisting}
+
+\subsection{Timing}
+
+\begin{itemize}
+    \item Pure combinational; latency = propagation delay of case decode ($\sim$1--2 gate delays).
+    \item If pipeline stage needed for timing closure, register output with system clock.
+\end{itemize}
+
+%==============================================================================
+\section{Thermometric Bit Reorder Mux}
+
+\subsection{Purpose}
+
+Enable arbitrary reordering of the 7 thermometric output bits. Use cases:
+\begin{itemize}
+    \item Compensate for layout-induced mismatch / gradient effects.
+    \item DEM (Dynamic Element Matching) scrambling patterns.
+    \item Post-silicon trimming / calibration.
+    \item Debug / characterization flexibility.
+\end{itemize}
+
+\subsection{Functional Description}
+
+A $7\times7$ crossbar mux. Each output position \texttt{T[i]} selects from any of the 7 thermometric encoder outputs \texttt{TH[6:0]} based on a per-output select field.
+
+\begin{verbatim}
+         TH[6:0] (from encoder)
+           | | | | | | |
+           v v v v v v v
+     +-------------------------+
+     |   7x7 Crossbar Mux     |
+     |                         |
+     |  sel[0] -> T[0]        |
+     |  sel[1] -> T[1]        |
+     |  sel[2] -> T[2]        |
+     |  sel[3] -> T[3]        |
+     |  sel[4] -> T[4]        |
+     |  sel[5] -> T[5]        |
+     |  sel[6] -> T[6]        |
+     +-------------------------+
+           | | | | | | |
+           v v v v v v v
+         T[6:0] (to analog cells)
+\end{verbatim}
+
+\subsection{Control Interface}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lcp{7cm}@{}}
+\toprule
+\textbf{Signal} & \textbf{Width} & \textbf{Description} \\
+\midrule
+\texttt{sel[0]} & 3 bits & Selects which \texttt{TH[x]} drives \texttt{T[0]} \\
+\texttt{sel[1]} & 3 bits & Selects which \texttt{TH[x]} drives \texttt{T[1]} \\
+\texttt{sel[2]} & 3 bits & Selects which \texttt{TH[x]} drives \texttt{T[2]} \\
+\texttt{sel[3]} & 3 bits & Selects which \texttt{TH[x]} drives \texttt{T[3]} \\
+\texttt{sel[4]} & 3 bits & Selects which \texttt{TH[x]} drives \texttt{T[4]} \\
+\texttt{sel[5]} & 3 bits & Selects which \texttt{TH[x]} drives \texttt{T[5]} \\
+\texttt{sel[6]} & 3 bits & Selects which \texttt{TH[x]} drives \texttt{T[6]} \\
+\midrule
+\textbf{Total}  & \textbf{21 bits} & Stored in configuration register \\
+\bottomrule
+\end{tabular}
+\caption{Mux Control Signals}
+\end{table}
+
+Each \texttt{sel[i]} encodes a value 0--6 selecting the source thermometric bit.
+
+\subsection{Configuration Register}
+
+\begin{itemize}
+    \item 21-bit register \texttt{mux\_cfg[20:0]}, partitioned as \texttt{\{sel[6], sel[5], \ldots, sel[0]\}}.
+    \item Loaded via SPI/JTAG/APB or hardwired scan chain --- depends on system integration.
+    \item \textbf{Default (reset) value:} identity mapping $\rightarrow$ \texttt{sel[i] = i} $\rightarrow$ \texttt{mux\_cfg = 21'b110\_101\_100\_011\_010\_001\_000}.
+    \item Register is static during DAC operation; update only when DAC is idle or outputs blanked.
+\end{itemize}
+
+\subsection{Implementation}
+
+\begin{lstlisting}[caption={Thermometric Reorder Mux}]
+module thermo_reorder_mux (
+    input  wire [6:0]  thermo_in,   // from bin2thermo encoder
+    input  wire [20:0] mux_cfg,     // {sel[6], sel[5], ..., sel[0]}, 3b each
+    output wire [6:0]  thermo_out   // to analog unit cells
+);
+
+    // Per-output 7:1 mux
+    genvar i;
+    generate
+        for (i = 0; i < 7; i = i + 1) begin : MUX_STAGE
+            wire [2:0] sel = mux_cfg[3*i +: 3];
+            assign thermo_out[i] = thermo_in[sel];
+        end
+    endgenerate
+
+endmodule
+\end{lstlisting}
+
+\subsection{Constraints and Validation}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lp{10cm}@{}}
+\toprule
+\textbf{Item} & \textbf{Requirement} \\
+\midrule
+Uniqueness   & Each \texttt{sel[i]} value must be unique (no two outputs driven by same source). Enforced by configuration software or optional HW checker. \\
+Range        & \texttt{sel[i]} $\in \{0\ldots6\}$. Value 7 is illegal; optional: tie output low on illegal select. \\
+Glitch-free  & \texttt{mux\_cfg} must not change while DAC is converting. Use clock-domain-safe load (shadow register + sync pulse). \\
+Timing       & Adds one 7:1 mux delay ($\sim$1--2 gate delays) to thermometric path. \\
+\bottomrule
+\end{tabular}
+\caption{Mux Constraints}
+\end{table}
+
+\subsection{Optional: Hardware Uniqueness Checker}
+
+\begin{lstlisting}[caption={Configuration Uniqueness Checker}]
+module uniqueness_check (
+    input  wire [20:0] mux_cfg,
+    output wire        cfg_valid  // 1 = all selects unique & in range
+);
+
+    wire [2:0] sel [0:6];
+    wire [6:0] onehot [0:6];
+    wire [6:0] combined;
+
+    genvar i;
+    generate
+        for (i = 0; i < 7; i = i + 1) begin : DECODE
+            assign sel[i] = mux_cfg[3*i +: 3];
+            assign onehot[i] = (sel[i] < 3'd7) ? (7'b1 << sel[i]) : 7'b0;
+        end
+    endgenerate
+
+    assign combined = onehot[0] | onehot[1] | onehot[2] | onehot[3]
+                    | onehot[4] | onehot[5] | onehot[6];
+
+    wire [6:0] xor_combined = onehot[0] ^ onehot[1] ^ onehot[2] ^ onehot[3]
+                            ^ onehot[4] ^ onehot[5] ^ onehot[6];
+
+    assign cfg_valid = (combined == 7'h7F) && (xor_combined == 7'h7F);
+
+endmodule
+\end{lstlisting}
+
+%==============================================================================
+\section{Top-Level Integration}
+
+\begin{lstlisting}[caption={DAC Digital Top-Level}]
+module dac_digital_top (
+    input  wire [6:0]  dac_code,     // 7-bit DAC input
+    input  wire [20:0] mux_cfg,      // thermometric reorder config
+    output wire [3:0]  binary_out,   // to 4 binary-weighted cells
+    output wire [6:0]  thermo_out    // to 7 thermometric unit cells
+);
+
+    wire [6:0] thermo_enc;
+
+    // Binary LSBs pass through
+    assign binary_out = dac_code[3:0];
+
+    // MSB binary-to-thermometric conversion
+    bin2thermo u_enc (
+        .bin    (dac_code[6:4]),
+        .thermo (thermo_enc)
+    );
+
+    // Thermometric reorder mux
+    thermo_reorder_mux u_mux (
+        .thermo_in  (thermo_enc),
+        .mux_cfg    (mux_cfg),
+        .thermo_out (thermo_out)
+    );
+
+endmodule
+\end{lstlisting}
+
+%==============================================================================
+\section{Verification Checklist}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}cl@{}}
+\toprule
+\textbf{\#} & \textbf{Check} \\
+\midrule
+1 & Monotonicity: consecutive \texttt{dac\_code} increases active elements by exactly one. \\
+2 & Full-scale: \texttt{dac\_code = 7'h7F} $\rightarrow$ all 4 binary + all 7 thermo active. \\
+3 & Zero-scale: \texttt{dac\_code = 7'h00} $\rightarrow$ no elements active. \\
+4 & Mux identity: default \texttt{mux\_cfg} produces \texttt{thermo\_out == thermo\_enc}. \\
+5 & Mux permutation: all $7! = 5040$ valid permutations preserve output set. \\
+6 & Invalid config: illegal \texttt{sel} values flagged by \texttt{cfg\_valid}. \\
+7 & No glitches on \texttt{thermo\_out} when \texttt{mux\_cfg} is stable. \\
+\bottomrule
+\end{tabular}
+\caption{Verification Checklist}
+\end{table}
+
+%==============================================================================
+\section{Configuration Examples}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Use Case} & \textbf{mux\_cfg (sel[6]\ldots sel[0])} & \textbf{Effect} \\
+\midrule
+Identity    & 6, 5, 4, 3, 2, 1, 0 & No reorder \\
+Reverse     & 0, 1, 2, 3, 4, 5, 6 & Mirror layout gradient \\
+Interleave  & 0, 2, 4, 6, 1, 3, 5 & Spread switching across array \\
+Custom cal  & Per-chip calibration  & Compensate measured mismatch \\
+\bottomrule
+\end{tabular}
+\caption{Example Mux Configurations}
+\end{table}
+
+%==============================================================================
+\section{Deliverables to Analog}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llcl@{}}
+\toprule
+\textbf{Signal} & \textbf{Direction} & \textbf{Width} & \textbf{Description} \\
+\midrule
+\texttt{binary\_out[3:0]} & Digital $\rightarrow$ Analog & 4 & Binary segment drivers \\
+\texttt{thermo\_out[6:0]} & Digital $\rightarrow$ Analog & 7 & Thermometric segment drivers (reordered) \\
+\bottomrule
+\end{tabular}
+\caption{Analog Interface Signals}
+\end{table}
+
+%==============================================================================
+\section*{Revision History}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Rev} & \textbf{Date} & \textbf{Author} & \textbf{Description} \\
+\midrule
+1.0 & \today & --- & Initial release \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}
